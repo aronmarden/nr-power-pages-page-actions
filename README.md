@@ -44,16 +44,38 @@ users typed.
 Copy the contents of [`nr-page-actions.js`](nr-page-actions.js) and add it to your
 site **after** the New Relic snippet. Two common placements:
 
-- **Site-wide (recommended):** paste it inside the **Footer** web template, in a
-  `<script>` block, below the New Relic loader.
+- **Site-wide (recommended):** paste it inside the **Footer** web template, in its
+  own `<script>` block, below the New Relic loader.
 - **Per page:** paste it into an individual page's **JavaScript** (Power Pages
   design studio → the page → *Edit → </> code*), or the page's `OnLoad` script.
 
+You end up with **two separate `<script>` blocks** — the agent first, the
+click-capture script under it:
+
 ```html
+<!-- New Relic loader — pasted verbatim from New Relic. It already includes its
+     own <script> tags, so don't wrap it in another pair. -->
+<script type="text/javascript">
+  ;window.NREUM||(NREUM={});NREUM.init=...   // New Relic's snippet, as copied
+</script>
+
+<!-- Auto PageActions — nr-page-actions.js is raw JavaScript, so you wrap it. -->
 <script>
-  /* paste the contents of nr-page-actions.js here */
+  (function () { "use strict"; /* ...contents of nr-page-actions.js... */ })();
 </script>
 ```
+
+Two things that commonly trip people up:
+
+- **The New Relic snippet already ships with its own `<script>…</script>` tags.**
+  Paste it exactly as copied — don't add an extra wrapper around it.
+- **`nr-page-actions.js` is raw JavaScript (no tags).** That one you *do* wrap in
+  `<script>…</script>` yourself, as shown above.
+
+The two blocks don't have to live in the same web template. The click script waits
+until the agent's API is ready (`whenReady`), so it's forgiving about order and
+placement — the New Relic loader in the **header** with the click script in the
+**footer** works just as well. The only hard rule is that **the agent loads first**.
 
 That's it — clicks now produce `uiInteraction` PageActions. Everything below is
 optional polish.
