@@ -133,20 +133,40 @@ Avoid stamping personal data such as email addresses.
 
 ## Step 4 — Curated business events (optional)
 
-For high-value moments, fire a named PageAction with your own attributes — for
-example on a form submit:
+For high-value moments, fire a named PageAction with your own attributes. The key
+is to attach it to the **actual action** — a form submit, button click, or success
+callback — not to run it on page load:
 
 ```html
 <script>
-  // Attach to the relevant form's submit, button click, or success handler.
-  if (window.newrelic) {
-    newrelic.addPageAction("enquirySubmitted", {
-      category: "support",
-      path: location.pathname
+  document.addEventListener("DOMContentLoaded", function () {
+    var form = document.querySelector("#enquiry-form"); // your form's selector
+    if (!form) return;
+    form.addEventListener("submit", function () {
+      if (window.newrelic) {
+        newrelic.addPageAction("enquirySubmitted", {  // your event name
+          category: "support",                        // your own attributes
+          path: location.pathname                     // e.g. "/enquiry/"
+        });
+      }
     });
-  }
+  });
 </script>
 ```
+
+What you change for your site:
+
+- **Selector** — `#enquiry-form` → the id/selector of the form or button you care
+  about.
+- **Event name** — `enquirySubmitted` → the business moment, e.g. `orderPlaced`,
+  `quoteRequested`, `documentDownloaded`.
+- **Attributes** — replace `category` with whatever you want to facet by in New
+  Relic (`formName`, `productId`, `amount`, …).
+
+`path` is filled in automatically by the browser — `location.pathname` is the
+current page's URL path (e.g. a form at `https://contoso.powerappsportals.com/enquiry/`
+gives `"/enquiry/"`). It's there so you can see *where* the event fired; you don't
+set it by hand.
 
 These sit alongside the automatic `uiInteraction` events and are ideal for funnels
 and conversion tracking.
