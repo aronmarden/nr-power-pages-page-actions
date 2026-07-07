@@ -1,206 +1,100 @@
-# New Relic Browser — automatic PageActions for Power Pages
+# Power Pages server-side logs → New Relic (via Azure Blob Storage)
 
-Turn ordinary user activity on a **Microsoft Power Pages** site into New Relic
-Browser **PageActions**, with no per-button or per-page coding. Drop in one small
-script and every meaningful click becomes a `uiInteraction` PageAction you can
-query, chart, and alert on.
+Power Pages writes its **server-side** logs (ASP.NET exceptions and the like) to a
+container in **Azure Blob Storage** — not to Application Insights or Log Analytics.
+This guide forwards those blobs into **New Relic Logs**, so you can see the
+server-side errors next to the browser telemetry the New Relic Browser agent already
+sends.
 
-> **Assumption:** the New Relic Browser agent is **already installed** on your
-> site — its loader snippet is pasted into the **header or footer web template**.
-> This project does not install the agent; it only adds the event wiring on top.
-
----
-
-## Why the agent alone doesn't give you this
-
-Installing the Browser snippet gets you the out-of-the-box telemetry automatically:
-**PageViews, JavaScript errors, AJAX/backend calls, Core Web Vitals, and Session
-Replay**. That's because the agent captures those on its own.
-
-**PageActions are different** — they only exist when something calls the agent's
-`newrelic.addPageAction()` API. Nothing in the base snippet does that, so out of
-the box you get zero PageActions. This project is simply a bit of JavaScript that
-listens for clicks and calls that API for you — the same idea used by code-based
-instrumentation elsewhere, but Power Pages lets you add JavaScript directly, so no
-extra components are needed.
+The supported path is New Relic's official **Azure Blob Storage forwarder** — an
+Azure Function that triggers whenever a new blob is written, reads it, and POSTs it
+to the New Relic Log API. No VM, no re-architecting.
 
 ---
 
-## What you get
+## Before you start
 
-- **`uiInteraction` PageAction on every meaningful click** — captures the element's
-  visible label, `id`, tag, link target, and the current path and page title.
-- **(Optional) Friendly PageView names** — nicer than raw URL paths.
-- **(Optional) User attribution** — stamp the signed-in contact onto the session.
-- **(Optional) Curated business events** — e.g. `enquirySubmitted`, `orderPlaced`.
-
-No input/field values are captured by the click handler, so it won't record what
-users typed.
-
----
-
-## Step 1 — Add the click-capture script (required)
-
-Copy the contents of [`nr-page-actions.js`](nr-page-actions.js) and add it to your
-site **after** the New Relic snippet. Two common placements:
-
-- **Site-wide (recommended):** paste it inside the **Footer** web template, in its
-  own `<script>` block, below the New Relic loader.
-- **Per page:** paste it into an individual page's **JavaScript** (Power Pages
-  design studio → the page → *Edit → </> code*), or the page's `OnLoad` script.
-
-You end up with **two separate `<script>` blocks** — the agent first, the
-click-capture script under it:
-
-```html
-<!-- New Relic loader — pasted verbatim from New Relic. It already includes its
-     own <script> tags, so don't wrap it in another pair. -->
-<script type="text/javascript">
-  ;window.NREUM||(NREUM={});NREUM.init=...   // New Relic's snippet, as copied
-</script>
-
-<!-- Auto PageActions — nr-page-actions.js is raw JavaScript, so you wrap it. -->
-<script>
-  (function () { "use strict"; /* ...contents of nr-page-actions.js... */ })();
-</script>
-```
-
-Two things that commonly trip people up:
-
-- **The New Relic snippet already ships with its own `<script>…</script>` tags.**
-  Paste it exactly as copied — don't add an extra wrapper around it.
-- **`nr-page-actions.js` is raw JavaScript (no tags).** That one you *do* wrap in
-  `<script>…</script>` yourself, as shown above.
-
-The two blocks don't have to live in the same web template. The click script waits
-until the agent's API is ready (`whenReady`), so it's forgiving about order and
-placement — the New Relic loader in the **header** with the click script in the
-**footer** works just as well. The only hard rule is that **the agent loads first**.
-
-That's it — clicks now produce `uiInteraction` PageActions. Everything below is
-optional polish.
+- **The log container exists.** Power Pages writes server-side logs to a blob
+  container (default name `telemetry-logs`) in a storage account you nominate,
+  configured in the Power Platform admin centre (connection string + retention). If
+  that isn't set up yet, do it first — there's nothing to forward otherwise.
+- **A New Relic ingest (licence) key.** New Relic → *API keys* → an **INGEST - LICENSE**
+  key.
+- **Your New Relic region** — US or EU (the forwarder asks which).
+- **Permission to deploy** an ARM template / resource into the Azure subscription that
+  holds the storage account.
 
 ---
 
-## Step 2 — Friendly PageView names (optional)
+## Steps
 
-By default the agent names each PageView after its URL path. To use nicer names,
-call `setPageViewName()` **in the header, immediately after the New Relic loader**
-— it must run before the page finishes loading, or the initial PageView is already
-sent with the default name.
+### 1. Confirm where the logs land
 
-```html
-<script>
-  // In the HEADER web template, right after the New Relic loader snippet.
-  (function () {
-    var map = {
-      "/": "/Home"
-      // "/enquiry/": "/Enquiry",
-      // "/orders/":  "/Orders"
-    };
-    var name = map[location.pathname] || location.pathname;
-    if (window.newrelic && newrelic.setPageViewName) {
-      newrelic.setPageViewName(name);
-    }
-  })();
-</script>
-```
+In the Power Platform admin centre, note the **storage account name** and the
+**container name** that Power Pages writes server-side logs to (default
+`telemetry-logs`). That's the container the forwarder will watch.
 
-Because Power Pages serves real pages with real URLs, each navigation is already a
-distinct PageView — you only need this if you want prettier names.
+### 2. Deploy the New Relic Blob Storage forwarder
 
----
+Use New Relic's maintained function. Two ways to deploy:
 
-## Step 3 — Attribute activity to the signed-in user (optional)
+- **Azure Marketplace** — search **"New Relic Azure Blob Storage"** and follow the
+  create flow, or
+- **One-click ARM template** — `azuredeploy-blobforwarder.json` from the New Relic
+  functions repo: https://github.com/newrelic/newrelic-azure-functions
 
-Power Pages exposes the authenticated contact through Liquid, so you can stamp a
-stable user id onto the session. Put this in the **header**, after the loader:
+During deploy you'll supply:
 
-```html
-{% if user %}
-<script>
-  if (window.newrelic && newrelic.setUserId) {
-    newrelic.setUserId("{{ user.id }}");
-  }
-</script>
-{% endif %}
-```
+| Setting | Value |
+|---|---|
+| New Relic licence key | your INGEST - LICENSE key |
+| New Relic region / endpoint | US → `https://log-api.newrelic.com/log/v1` · EU → `https://log-api.eu.newrelic.com/log/v1` |
+| Storage account | the one from Step 1 |
+| Container | the log container from Step 1 (e.g. `telemetry-logs`) |
 
-Use whatever Liquid attribute suits you (`user.id` is stable and non-identifying).
-Avoid stamping personal data such as email addresses.
+Deploy into the same subscription/region as the storage account.
 
----
+### 3. Generate a log
 
-## Step 4 — Curated business events (optional)
+Trigger a server-side error on the portal (or wait for the next log blob to roll), so
+Power Pages writes a new blob. The Blob-trigger function fires on that write and
+forwards it.
 
-For high-value moments, fire a named PageAction with your own attributes — for
-example on a form submit:
+### 4. Verify in New Relic
 
-```html
-<script>
-  // Attach to the relevant form's submit, button click, or success handler.
-  if (window.newrelic) {
-    newrelic.addPageAction("enquirySubmitted", {
-      category: "support",
-      path: location.pathname
-    });
-  }
-</script>
-```
-
-These sit alongside the automatic `uiInteraction` events and are ideal for funnels
-and conversion tracking.
-
----
-
-## Verify in New Relic
-
-Give it a minute after clicking around, then run these in **Query builder** (NRQL):
+Wait a minute, then in **Query builder** (NRQL):
 
 ```sql
--- Are the automatic click events arriving?
-FROM PageAction SELECT count(*) FACET label
-WHERE actionName = 'uiInteraction' SINCE 30 minutes ago
+-- Are the forwarded logs arriving?
+FROM Log SELECT count(*) SINCE 30 minutes ago
 
--- Inspect a few raw events
-FROM PageAction SELECT * WHERE actionName = 'uiInteraction'
-SINCE 30 minutes ago LIMIT 20
-
--- Any curated business events?
-FROM PageAction SELECT count(*) FACET actionName SINCE 30 minutes ago
+-- Inspect a few
+FROM Log SELECT * SINCE 30 minutes ago LIMIT 20
 ```
 
-Scope to your app if you have several:
-`... WHERE appName = 'Your Browser app name'`.
+If nothing shows, check the Function App's invocation logs in Azure (it logs each
+trigger and any POST error), and confirm the licence key and region endpoint.
 
 ---
 
-## Notes & gotchas
+## Correlate with the browser telemetry
 
-- **Serve over HTTP(S), not `file://`.** The Browser agent won't initialise from a
-  local file, so test on the deployed site or a proper local server.
-- **Don't double-install the agent.** This project assumes the loader is already
-  present. Adding a second copy will double-count telemetry.
-- **Ad/script blockers** can drop the New Relic beacon; if you see nothing, test
-  with blockers off.
-- **Timing.** `addPageAction` and `setPageViewName` are available as soon as the
-  loader snippet has run — that's why the loader must come first. The click script
-  includes a short guard in case load order varies.
-- **Privacy.** The click handler records visible labels and ids only, never input
-  values. If any button label itself contains sensitive text, trim or omit it in
-  the `label` mapping before shipping.
-- **Extending coverage.** Add your own CSS selectors or `data-*` attributes to
-  `CLICK_SELECTOR` in `nr-page-actions.js` to capture custom components.
+To line these server-side logs up with the front-end data the Browser agent sends,
+carry a **shared attribute** on both sides — at minimum an app/environment name, and
+ideally a session or trace id if your logs include one. Then you can pivot from a
+browser error to the matching server log.
 
 ---
 
-## Files
+## Good to know
 
-| File | Purpose |
-|---|---|
-| [`nr-page-actions.js`](nr-page-actions.js) | The paste-in click-capture script (Step 1). |
-| `README.md` | This guide. |
+- **Event-driven, not tailing.** The function fires on each new blob write. A blob
+  that is *modified* is resent in full, which can duplicate — fine for discrete
+  per-error / rolled log blobs, worth knowing if you ever point it at append blobs.
+- **Size cap.** The Node blob binding fails above ~105 MB per blob. Power Pages error
+  blobs are well under that.
+- **This is separate from Azure Monitor / Event Hub.** Those carry Azure *platform*
+  metrics and diagnostic logs, not the application logs Power Pages writes to blob —
+  so they don't replace this.
 
-## Licence
-
-MIT — see [`LICENSE`](LICENSE).
+Reference: https://docs.newrelic.com/docs/logs/forward-logs/azure-log-forwarding/
