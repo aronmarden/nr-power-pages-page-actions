@@ -11,6 +11,11 @@
  * What it emits: one PageAction named "uiInteraction" per meaningful click, with
  * the element's visible label, id, tag, link target, and the current path/title.
  * It deliberately does NOT read input values, so no field data is captured.
+ *
+ * Privacy: labels pass through safeLabel() below, which masks emails and long
+ * digit runs (account / invoice / amount) before sending. To drop a specific
+ * button's label entirely, add the attribute data-nr-nolabel to it — the click,
+ * id, tag and path are still recorded, only the text is omitted.
  */
 (function () {
   "use strict";
@@ -36,6 +41,22 @@
     ".btn"
   ].join(", ");
 
+  // Build the label we send from an element's visible text.
+  //   - data-nr-nolabel on the element → omit the text entirely (click still recorded)
+  //   - mask obvious PII: email addresses, and runs of 4+ digits (account /
+  //     invoice numbers, dollar amounts). This is a coarse net, not a validator —
+  //     digits split by separators (e.g. "12,340") and non-numeric secrets slip
+  //     through, so use data-nr-nolabel for anything you know is sensitive.
+  //   - collapse whitespace and cap length. Ordinary labels ("Save",
+  //     "Add supplier") pass through unchanged.
+  function safeLabel(el) {
+    if (el.hasAttribute("data-nr-nolabel")) return "";
+    return (el.innerText || el.value || el.getAttribute("aria-label") || "")
+      .replace(/\S+@\S+/g, "[email]")
+      .replace(/\d{4,}/g, "[num]")
+      .trim().replace(/\s+/g, " ").slice(0, 120);
+  }
+
   whenReady(function (newrelic) {
     document.addEventListener("click", function (e) {
       if (!(e.target instanceof Element)) return;
@@ -43,8 +64,7 @@
       if (!el) return;
       try {
         newrelic.addPageAction("uiInteraction", {
-          label: (el.innerText || el.value || el.getAttribute("aria-label") || "")
-            .trim().replace(/\s+/g, " ").slice(0, 120),
+          label: safeLabel(el),
           controlId: el.id || "",
           tag: el.tagName.toLowerCase(),
           href: el.getAttribute("href") || "",

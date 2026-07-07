@@ -187,8 +187,12 @@ Scope to your app if you have several:
   loader snippet has run — that's why the loader must come first. The click script
   includes a short guard in case load order varies.
 - **Privacy.** The click handler records visible labels and ids only, never input
-  values. If any button label itself contains sensitive text, trim or omit it in
-  the `label` mapping before shipping.
+  values. Labels are also run through `safeLabel()`, which masks email addresses
+  and runs of 4+ digits (account / invoice numbers, dollar amounts) before
+  sending — so ordinary labels like "Save" pass through untouched while obvious
+  PII is redacted. It's a coarse net, not a validator: for any button whose text
+  you know is sensitive, add `data-nr-nolabel` to the element to omit its label
+  entirely (the click, id, tag and path are still recorded).
 - **Extending coverage.** Add your own CSS selectors or `data-*` attributes to
   `CLICK_SELECTOR` in `nr-page-actions.js` to capture custom components.
 
